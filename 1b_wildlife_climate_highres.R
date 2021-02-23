@@ -139,21 +139,23 @@ for(i in 1:length(species)){
 }
 
 # Don't run --------------------------------------------------------------------
+map2_df(biomod_models, species, function(mod_obj, sp_name){
+  the_model <- get(mod_obj)
+  get_evaluations(the_model, as.data.frame = T) %>%
+    # If using multiple model types
+    # separate(col = Model.name, into = c('Model_type','Run'), sep = '_') %>%
+    # dplyr::select(-Evaluating.data, -Run) %>%
+    # group_by(Model_type, Eval.metric) %>%
+    group_by(Eval.metric) %>% 
+    summarise(across(where(is.numeric),
+                     list(mean = ~mean(.x, na.rm = T), se = ~(sd(.x, na.rm = T)/sqrt(n_runs))))) %>% 
+    mutate(species = sp_name) 
+  }) %>% 
+  write_csv(paste0('eval_stats_allSpecies.csv'))
+
+
 # Variable importance and response curves... models loaded from disk
 walk2(biomod_models, species, function(mod_obj, sp_name){
-
-  the_model <- get(mod_obj)
-
-  evals <- get_evaluations(the_model, as.data.frame = T) %>%
-    mutate(species = sp_name)
-  # If using multiple model types
-  # %>%
-  #   separate(col = Model.name, into = c('Model_type','Run'), sep = '_') %>%
-  #   #dplyr::select(-Evaluating.data, -Run) %>%
-  #   group_by(Model_type, Eval.metric) %>%
-  #   summarise(across(everything(),
-  #                    list(mean = ~mean(.x, na.rm = T), sd = ~sd(.x, na.rm = T))))
-  write_csv(evals, paste0('eval_stats_',sp_name,'.csv'))
 
   var_import <- get_variables_importance(the_model, as.data.frame = T) %>%
     as.data.frame.table() %>%
@@ -231,7 +233,7 @@ spp_cols <- c('#807dba','#41ab5d','#f16913') #c('#f16913','#7f2704','#41ab5d','#
 spp_labs <- c('bbwo' = 'P. arcticus', 'mart' = 'M. americana', 'tahu' = 'T. hudsonicus')
 
 ggplot(vimp_high) +
-  geom_col(aes(x = Var1, y = mean_import, fill = species), color = 'black',
+  geom_col(aes(x = Var1, y = mean_import, fill = species), color = 'black', size = 0.35,
            position = dodge) +
   # geom_errorbar(aes(x = Var1, 
   #                   ymin = mean_import - se2, 
@@ -244,9 +246,23 @@ ggplot(vimp_high) +
   labs(y = 'Mean variable importance') +
   #facet_wrap(~species, ncol = 1) +
   coord_flip() +
-  theme_bw(base_size = 14) +
-  theme(axis.title.y = element_blank())
-  
+  theme_bw() %+replace%
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    axis.text = element_text(color="black",size=6),
+    axis.title = element_text(size=8),
+    axis.ticks = element_line(color="black",size=0.25),
+    axis.title.y = element_blank(),
+    # legend
+    legend.position="bottom",
+    legend.title = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.key.size = unit(0.25, 'cm'))
+
+ggsave(filename = 'variable_importance.png',
+       height = 120, width = 100, units = 'mm',
+       dpi = 600)
 
 # Create ensemble models and project them on contemporary/historical data
 walk2(biomod_models, species, function(mod_obj, sp_name){

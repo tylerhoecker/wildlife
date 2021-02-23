@@ -7,6 +7,8 @@ library(RSQLite)
 library(dbplyr)
 library(viridis)
 
+setwd("/Volumes/thexternal/iLand_gye/wildlife_pc")
+
 # Make sure select is from dplyr package
 select <- dplyr::select
 
@@ -16,6 +18,8 @@ output_dir <- file.path('untar_output')
 # Things to specify
 species <- c('bbwo','mart','tahu')
 decades = seq(5,95,10)
+# Re ran 2010 after including spin-up fires (1984-2005)
+# decades = decades[1]
 simulations <- seq(0,19)
 
 # This is a dataframe listing all landscape-GCM-RCP-iteration combinations for function to iterate over
@@ -26,8 +30,8 @@ scenarios <-
 
 # TESTING
 # landscape = c('grte')
-# gcm= c('hadgem2es')
-# rcp = c('45')
+# gcm= c('canesm2')
+# rcp = c('85')
 
 # A set of nested functions produce a set of binary rasters of habitat suitability
 # One raster per Landscape/GCM/RCP/Simulation/Decade/Species (!!!)
@@ -36,15 +40,15 @@ habitat_fn <- function(landscape,gcm,rcp,sim){
   # Status update... check if scenario is already complete, if so, skip
   scenario_name <- paste0(landscape,'_',gcm,'_',rcp)
   
-  if(length(
-    list.files(
-      path = 'habitat_results/decadal',
-      pattern = c(paste0('habitat_',landscape,'_',gcm,'_',rcp), '.*'))
-    ) ==  600){
-    
-    print(paste0(paste0(landscape,'_',gcm,'_',rcp), ' already complete'))
-    return(NULL) 
-  }
+  # if(length(
+  #   list.files(
+  #     path = 'habitat_results/decadal',
+  #     pattern = c(paste0('habitat_',landscape,'_',gcm,'_',rcp), '.*'))
+  #   ) ==  600){
+  # 
+  #   print(paste0(paste0(landscape,'_',gcm,'_',rcp), ' already complete'))
+  #   return(NULL)
+  # }
   
   print(paste('Running:', scenario_name))
   
@@ -54,7 +58,10 @@ habitat_fn <- function(landscape,gcm,rcp,sim){
   
   # Identify cells burned by 'planned fires' - save these IDs for use in BBWO rules
   # B/c how the modeling was set up, this will include only fires that happened 2006-2016. 
-  planned <- raster('../training_perimeters_21st_century.txt', crs = '+init=EPSG:26912')
+  imposed_1984_2005 <- raster('imposed_fires_1984_2005.txt', crs = '+init=EPSG:26912')
+  imposed_2006_2016 <- raster('imposed_fires_2006_2016.txt', crs = '+init=EPSG:26912')
+  
+  planned <- mosaic(imposed_1984_2005,imposed_2006_2016, fun = max)
   # Concert raster of years to spatial dataframe
   fire_year_cells <- rasterToPoints(planned, function(x) x > 0, spatial = T)
   # Use spatial dataframe to idenitfy RIDs
@@ -64,23 +71,23 @@ habitat_fn <- function(landscape,gcm,rcp,sim){
     as_tibble() %>% 
     mutate(rid = burned_rid) %>% 
     filter(!is.na(rid)) %>% 
-    dplyr::select(rid, fire_year = training_perimeters_21st_century) 
-  # Remove things that are no longer needed
+    dplyr::select(rid, fire_year = layer) 
+  # Remove things that are no longer needed for memory sake
   rm(planned, fire_year_cells, burned_rid)
   
   # The meat: loop through simulations and identify habitat based on rules
   sim_fn <- function(sim){
     
-    if(length(
-      list.files(
-        path = 'habitat_results/decadal',
-        pattern = c(paste0('habitat_',landscape,'_',gcm,'_',rcp,'_',sim), '.*'))
-      ) ==  30){
-      
-      print(paste0(paste0(landscape,'_',gcm,'_',rcp), ' already complete'))
-      return(NULL) 
-    }
-    
+    # if(length(
+    #   list.files(
+    #     path = 'habitat_results/decadal',
+    #     pattern = c(paste0('habitat_',landscape,'_',gcm,'_',rcp,'_',sim), '.*'))
+    #   ) ==  30){
+    #   
+    #   print(paste0(paste0(landscape,'_',gcm,'_',rcp), ' already complete'))
+    #   return(NULL) 
+    # }
+    # 
     # Define paths to outputs etc
     output_path <- file.path('/Volumes/thexternal/iLand_gye',output_dir,
                              paste(scenario_name,'output', sim, sep = '_'),
@@ -102,21 +109,21 @@ habitat_fn <- function(landscape,gcm,rcp,sim){
     # For each scenario, iterate through each timestep (decades)
     decade_fn <- function(model_year){
       
-      if(length(
-        list.files(
-          path = 'habitat_results/decadal',
-          pattern = c(paste0('habitat_',landscape,'_',gcm,'_',rcp,'_',sim,'_',model_year+2005),'.*'))
-        ) ==  3){
-        
-        print(paste0(paste0(landscape,'_',gcm,'_',rcp), ' already complete'))
-        return(NULL) 
-      }
+      # if(length(
+      #   list.files(
+      #     path = 'habitat_results/decadal',
+      #     pattern = c(paste0('habitat_',landscape,'_',gcm,'_',rcp,'_',sim,'_',model_year+2005),'.*'))
+      #   ) ==  3){
+      #   
+      #   print(paste0(paste0(landscape,'_',gcm,'_',rcp), ' already complete'))
+      #   return(NULL) 
+      # }
       
       
       # For BBWO, iterate each year of the decade proceeding each timestep
       bbwo_fun <- function(year_x){
         
-        # print(paste0('Running year ',year_x,' (',year_x+2005,')'))
+        print(paste0('Running year ',year_x,' (',year_x+2005,')'))
         
         # Pull out the planned fires for this year
         planned_cells <- planned_fire_cells %>% 
@@ -260,8 +267,7 @@ habitat_fn <- function(landscape,gcm,rcp,sim){
         writeRaster(hab_rast, 
                     paste0('habitat_results/decadal/habitat_',
                            scenario_name,'_',sim,'_',model_year+2005,'_',x,'.tif'), 
-                    overwrite = T)
-        }) 
+                    overwrite = T)}) 
     }
     
     # decades <-  c(5,15)  

@@ -1,5 +1,7 @@
+# THIS IS NO LONGER NECCESARY 2/1/2020
+
 # SCRIPT TO CREATE COMBINED NICHE RASTERS FOR 'HISTORICAL' PERIOD,
-# USING HABITAT FROM 2020 AND HISTORICAL CLIMATE
+# USING HABITAT FROM 2010 AND HISTORICAL CLIMATE
 library(raster)
 library(tidyverse)
 
@@ -46,30 +48,30 @@ walk(landscapes, function(ls){
                 filename = paste0('biomod2ing/historical_rasters/',ls,'_',sp_name,'.tif'),
                 overwrite = T)
   
+  # THIS PART IS NOT NECCESARY ANYMORE... USING 2010 for historical right in the combined script.
   # Habitat from earliest timestep
-  # Just take all habitat rasters for this species in 2010 and average them
-  habitat_files <- list.files(
-    path = 'habitat_results/decadal',
-    pattern = paste0('habitat_',ls,'.*',2010,'_',sp_name,'.*'), full.names = T)
-  habitat_hist <- map(habitat_files, raster) %>% 
-    stack() %>% 
-    mean(., na.rm = T)
-  
-  # Quicker than reclassify - just round! Not very consequential here since all scenarios are very similar at this point
-  habitat_bin <- round(habitat_hist)
-  writeRaster(habitat_bin,
-              filename = paste0('habitat_results/historical/',ls,'_',sp_name,'.tif'),
-              overwrite = T)
-  
-  # Combine climate and habitat
-  combined_hist <- biomod_iland * habitat_bin
-  
-  writeRaster(combined_hist,
-              filename = paste0('combined_spatial/',ls,'_historical_',sp_name,'.tif'),
-              overwrite = T)
-  
+  # # Just take all habitat rasters for this species in 2010 and average them
+  # habitat_files <- list.files(
+  #   path = 'habitat_results/decadal',
+  #   pattern = paste0('habitat_',ls,'.*',2010,'_',sp_name,'.*'), full.names = T)
+  # habitat_hist <- map(habitat_files, raster) %>% 
+  #   stack() %>% 
+  #   mean(., na.rm = T)
+  # 
+  # # Quicker than reclassify - just round! Not very consequential here since all scenarios are very similar at this point
+  # habitat_bin <- round(habitat_hist)
+  # writeRaster(habitat_bin,
+  #             filename = paste0('habitat_results/historical/',ls,'_',sp_name,'.tif'),
+  #             overwrite = T)
+  # 
+  # # Combine climate and habitat
+  # combined_hist <- biomod_iland * habitat_bin
+  # 
+  # writeRaster(combined_hist,
+  #             filename = paste0('combined_spatial/',ls,'_historical_',sp_name,'.tif'),
+  #             overwrite = T)
+  # 
   })
 })
 
-cutoffs <- readRDS('biomod2ing/cutoff_values.Rds')
 

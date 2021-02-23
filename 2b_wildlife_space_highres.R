@@ -1,18 +1,163 @@
 library(raster)
 library(tidyverse)
-#library(furrr)
-library(tmap)
 
-# Things to specify
+# Things to specify ------------------------------------------------------------
 species <- c('bbwo','mart','tahu')
-snaps <- c(2050,2080)
-#simulations <- seq(0,19)
+# simulations <- c(0,1,5,10,15,19)
+simulations <- seq(0,19)
+# This is a bit funky, but these are repeated so that climate periods are associated with each decade of habitat
+periods <- c(2030,2050,2070) # This will get revised later in the script to be c('historical','2030','2050','2070')
+# Note here that 2010 is in the historical slot
+dec_groups <- list(2010, c(2020,2030,2040),c(2040,2050,2060),c(2060,2070,2080)) 
+
+# decades <- seq(2030,2100,10)
+cutoffs <- readRDS('biomod2ing/cutoff_values.Rds')
+# ------------------------------------------------------------------------------
 
 
+landscape = c('grte')
+gcm= c('canesm2')
+rcp = c('45')
+
+wildlife_space <- function(landscape,gcm,rcp){
+  
+  if(length(
+    list.files(path = 'combined_spatial/',
+               pattern = paste0(landscape,'_',gcm,'_',rcp,'.*'))
+    ) == length(species)*length(dec_groups) ){
+    print(paste(landscape,gcm,rcp,'already complete!', sep = ' '))
+    return(NULL)
+  } else {
+    print(paste(landscape,gcm,rcp, sep = ' '))
+  }
+  if(landscape == 'sgye' & gcm == 'hadgem2es' & rcp == '85'){
+    simulations <- c(0:13,15:19)
+  }
+  
+  ## CLIMATE -------------------------------------------------------------------
+  # List the results files for this scenario
+  climate_files <- list.files(
+    path = 'biomod2ing/future_rasters',
+    pattern = paste0(landscape,'_',gcm,'_',rcp,'.*'), full.names = T) 
+  
+  # # Some weird stuff to sort this list of files by period, then species
+  # these_files <- map(periods, function(x){
+  #   climate_files[grepl(paste0('.*',x,'.*'), climate_files)]}) 
+  
+  # A list of future climate rasters now sorted by decade and then by species
+  fut_clim <- map(climate_files, ~
+                    stack(.x) %>%  
+                    unstack(.) %>% 
+                    set_names(., species)) %>% 
+    set_names(periods)
+  
+  # Add historical climate rasters to this list
+  hist_files <- list.files(
+    path = 'biomod2ing/historical_rasters',
+    pattern = paste0(landscape,'.*'), full.names = T)
+  
+  # Read in the raster for each species
+  hist_clim <- map(hist_files, raster) %>% 
+    set_names(species)
+  # Make it a list named by decade, like the future list
+  # hist_decade <- list('2010' = hist_clim, '2020' = hist_clim)
+  hist_clim <- list('hist' = hist_clim)
+  
+  # Combine the historical and future into decade-element list
+  period_climate <- c(hist_clim, fut_clim)
+  
+  # Now rename `periods` so that it includes these new historical decades
+  periods <- names(period_climate)
+  
+  ## HABITAT  ------------------------------------------------------------------
+  # List habitat files
+  habitat_files <- list.files(
+    path = 'habitat_results/decadal',
+    pattern = c(paste0('habitat_',landscape,'_',gcm,'_',rcp), '.*'), full.names = T) 
+  # Select only files for certain simulations (not necessary after all simulations are run)
+  these_files <- paste0(landscape,'_',gcm,'_',rcp,'_[',paste(simulations, collapse = '|'),']+_.*')
+  habitat_files <- habitat_files[grepl(these_files, habitat_files)]
+  
+  
+  # Check that everything is there!
+  if(length(habitat_files)/length(simulations) < 30){
+    stop(paste0('Habitat results for ', paste0(landscape,'_',gcm,'_',rcp), ' missing: ', 
+                length(habitat_files), ' of ', length(simulations) * 30,' present'))
+  }
+  
+  # Figuring this out... must average all simulations first, then do mosaic within each climate period-group
+  all_habitat <- habitat_files %>% 
+    map(., raster) 
+  
+  # Organize the rasters by decades, since all sims for each decade will get averaged
+  decade_hab <- map(seq(2010,2100,10), function(x){
+    all_habitat[grepl(paste0('.*',x,'.*'), all_habitat)]}) %>% 
+    set_names(seq(2010,2100,10))
+  
+  # For each species, stack all sims in each decade and calculate mean,
+  # then reclassify the mean to binary
+  mean_hab <- map(decade_hab, function(x){
+    map(species, function (sp){
+      x[grepl(paste0('.*_[0-9]{4}_',sp,'.*'), x)] %>% 
+        stack() %>% 
+        mean() %>% 
+        reclassify(matrix(c(0,0.5,0, 0.5,1,1), ncol=3, byrow=TRUE))}) %>% 
+      set_names(species)}) %>% 
+    unlist()
+  
+  name_index <- names(mean_hab)
+  
+  period_hab <- 
+    map(dec_groups, function(group){ 
+       map(species, function(sp){
+        period_hab <- 
+          mean_hab[grepl(paste0(paste(group, collapse = paste0('.',sp,'|')),'.',sp),
+                         name_index)]
+        # For climate periods that include more than 1 decade (all but historical [==2010]),
+        # Calculate the mean
+        period_hab <- mean(stack(period_hab))
+        # Then reclassify the mean (thus, 2/3 = 1 and 1/3 = 0)
+        period_hab <- reclassify(period_hab, matrix(c(0,0.5,0, 0.5,1,1), ncol=3, byrow=TRUE))
+        return(period_hab)
+      }) %>% 
+        set_names(species)
+    }) %>% 
+    set_names(periods)
+  
+  # habitat = period_hab[[2]]
+  # climate = period_climate[[2]]
+  # period = periods[[2]]
+  pwalk(list(period_hab, period_climate, periods), 
+        function(habitat, climate, period){
+          combined <- unstack(stack(habitat) * stack(climate))
+          to_write <- list(habitat, combined)
+          walk2(to_write, c('habitat_results/decadal_means/','combined_spatial/'),
+                function(x,write_path){
+                  writeRaster(stack(x),
+                              filename = paste0(write_path,landscape,'_',gcm,'_',rcp,'_',period,'.tif'),
+                              bylayer = T, suffix = species,
+                              overwrite = T)})
+          })
+}
+
+# This is a dataframe listing all landscape-GCM-RCP-iteration combinations for function to iterate over
+scenarios <- 
+  expand.grid('landscape' = c('grte','nynp','synp','wynp','sgye'), # 'grte','nynp','nynp','synp','wynp','sgye'
+              'gcm'= c('canesm2','hadgem2es'), # 'canesm2', 'hadgem2cc','hadgem2es',,'hadgem2cc',,'canesm2'
+              'rcp' = c('45','85'))
+
+pwalk(scenarios, wildlife_space)
+
+
+
+
+
+
+
+
+
+# OLD ---------
 # TESTING
-# landscape = c('grte')
-# gcm= c('canesm2')
-# rcp = c('45')
 
 # Function to read in the results of the habitat (1a) and climate (1b) envelope modeling scripts
 wildlife_space <- function(landscape,gcm,rcp){

@@ -5,12 +5,11 @@ library(tidyverse)
 
 raster_dir <- '/Volumes/thexternal/iLand_gye/wildlife_pc/combined_spatial/'
 species <- c('bbwo','mart','tahu')
-snaps <- c('historical',2050,2080)
-simulations <- seq(0,9)
+periods <- c('hist',2030,2050,2070)
+simulations <- seq(0,19)
 
 # Maxent thresholds 
 cutoffs <- readRDS('biomod2ing/cutoff_values.Rds')
-names(cutoffs) <- species
 
 # List of patch metrics
 met_list <- list('area','enn','shape')
@@ -18,45 +17,37 @@ met_list <- list('area','enn','shape')
 
 # TESTING
 # landscape = c('grte')
-# gcm = c('canesm2')
-# rcp = c('45')
+# gcm = c('hadgem2es')
+# rcp = c('85')
 
 
 wildlife_ls_metrics <- function(landscape, gcm, rcp){
   
-  # Names of historical combined niche rasters
-  hist_files <- list.files(
+  # Names of combined rasters
+  spatial_files <- list.files(
     path = 'combined_spatial',
-    pattern = c(paste0(landscape,'_historical'), '.*'), full.names = T) 
-  # Names of future combined niche rasters
-  future_files <- list.files(
-    path = 'combined_spatial',
-    pattern = c(paste0(landscape,'_',gcm,'_',rcp), '.*'), full.names = T)
-  # Concatenate
-  spatial_files <- c(hist_files,future_files)
-  
-  decade_files <- map(snaps, function(x){
+    pattern = paste0(landscape,'_',gcm,'_',rcp,'.*\\.tif$'), full.names = T)
+ 
+  decade_files <- map(periods, function(x){
     spatial_files[grepl(paste0('.*',x,'.*'), spatial_files)]}) 
   
   # Read in the files, do some things
-  spatial_snaps <- map(decade_files, function(x){
+  spatial_periods <- map(decade_files, function(x){
     map(species, function (sp){
       r <- raster(x[grepl(paste0('.*',sp,'.*'), x)]) %>%
-        reclassify(., matrix(c(0,cutoffs[[sp]], 0, cutoffs[[sp]],1000, 1), ncol=3, byrow=TRUE)) 
+        reclassify(., matrix(c(0,cutoffs[[sp]]$mean, 0, cutoffs[[sp]]$mean,1000, 1), ncol=3, byrow=TRUE)) 
       names(r) <- sp
       return(r) }) %>% 
       set_names(species) }) %>% 
-    set_names(snaps)
+    set_names(periods)
   
   # ------------------------------------------------------------------------------
   # Calculate metrics... these are patch-level metrics that are then summarized to class-level (just habitat patches)
   # ------------------------------------------------------------------------------
   # Function to calculate an area-weighted patch metric
-  # 'mart' and 'tahu' are currently hard-coded here...
   area_weighted <- function(metric, surface) {
     
     surface <- stack(surface) 
-    
     metric_fn  <- get(paste0('lsm_p_', metric))
     metric_patch <- metric_fn(surface)
     area_patch <- lsm_p_area(surface) 
@@ -67,7 +58,7 @@ wildlife_ls_metrics <- function(landscape, gcm, rcp){
                 by = c("layer", "level", "class", "id")) %>%
       mutate(value.w = value.x * value.y) %>%
       group_by(layer, class) %>%
-      summarise(value = sum(value.w) / sum(value.y), .groups = 'drop') %>% 
+      summarise(value = sum(value.w, na.rm = T) / sum(value.y, na.rm = T), .groups = 'drop') %>% 
       filter(class == 1) %>% select(-class) %>% 
       mutate(metric = paste0(metric,'_am'),
              species = case_when(layer == 1 ~ species[1],
@@ -79,13 +70,11 @@ wildlife_ls_metrics <- function(landscape, gcm, rcp){
   }
   
   patch_met_df <- 
-    map_df(spatial_snaps, function(x){
+    map_df(spatial_periods, function(x){
       map_df(met_list, area_weighted, surface = x) %>%
       mutate(landscape = landscape,
              gcm = gcm,
              rcp = rcp)}, .id = 'year')
-  
-  
 }
 
 # Build dataframe of scenarios to analyze
@@ -102,7 +91,7 @@ wildlife_metrics_df <-
 complete_df <- expand.grid('landscape' = c('grte','synp','nynp','wynp','sgye'), #,'grte','nynp','wynp','synp','sgye'
                            'gcm'= c('canesm2','hadgem2es'), # ,'hadgem2es','canesm2'
                            'rcp' = c('45','85'), 
-                           'year'  = factor(snaps, levels = snaps),
+                           'year'  = factor(periods, levels = periods),
                            'species' = species,
                            'metric' = paste0(unlist(met_list),'_am')) %>% 
   full_join(wildlife_metrics_df) %>% 
@@ -111,36 +100,47 @@ complete_df <- expand.grid('landscape' = c('grte','synp','nynp','wynp','sgye'), 
 
 # ------------------------------------------------------------------------------
 # Plotting
-plot_df <- complete_df %>% #filter(rcp == '85') %>%
+plot_df <- complete_df %>% filter(gcm == 'hadgem2es' & rcp == '85' | gcm == 'canesm2' & rcp == '45') %>%
   mutate(value = ifelse(value > 10000, 10000, value))
 
 fig_cols <- c('#f16913','#7f2704','#41ab5d','#00441b','#807dba','#3f007d')
-gcm_labs <- c('canesm2' = 'Warm-wet (CanESM2)', 'hadgem2es' = 'Warm-dry (HadGEM2-ES)')
+
+gcm_labs <- c('canesm2' = 'Wet (CanESM2)', 'hadgem2es' = 'Dry (HadGEM2-ES)')
+rcp_labs <- c('45' = 'Warm-Wet', '85' = 'Hot-Dry')
 metric_labs <- c('area_am' = 'Patch size (ha)', 
                  'enn_am' = 'NN-Distance (m)', 
                  'shape_am' = 'Shape index')
 
-b_plot <- 
-  ggplot(plot_df) +
-  geom_col(aes(x = year, y = value, fill = interaction(rcp, species)), position = 'dodge2', color = 'black') +
-  scale_fill_manual('RCP; Species', values = fig_cols) +
-  # 
-  # scale_fill_manual('Species', values = fig_cols[c(1,3,6)], 
-  #                   labels = c('P. arcticus','M. americana', 'T. hudsonicus')) +
-  facet_grid(metric~gcm, 
-             labeller = labeller(gcm = gcm_labs, metric = metric_labs), 
+ggplot(plot_df) +
+  geom_col(aes(x = year, y = value, fill = species), 
+           position = 'dodge2', color = 'black') +
+  scale_fill_manual('Species', values = fig_cols[c(5,3,1)],
+                    labels = c('Black-backed Woodpecker','North American marten', 'Red squirrel')) +
+  facet_grid(metric~rcp, 
+             labeller = labeller(rcp = rcp_labs, metric = metric_labs), 
              scales = 'free') + # landscape~gcm+
-  scale_x_discrete(labels = c('Historical','2050','2080')) +
+  scale_x_discrete(labels = c('Hist.','2030','2050','2070')) +
   labs(y = 'Landscape metric value') +
-  theme_bw(base_size = 12) +
-  theme(strip.background =  element_rect('transparent'),
-        strip.text = element_text(face = 'bold'),
-        axis.title.x = element_blank(),
-        legend.position = 'bottom')
-b_plot
+  theme_bw() %+replace%
+  theme(
+    # axes
+    axis.text = element_text(color="black",size=6),
+    axis.title = element_text(size=8),
+    axis.title.x = element_blank(),
+    axis.ticks = element_line(color="black",size=0.25),
+    # legend
+    legend.position ="bottom",
+    legend.title = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.key.height = unit(0.25, 'cm'),
+    legend.key.width = unit(0.25, 'cm'),
+    # facets
+    strip.background =  element_blank(),
+    strip.text = element_text(size = 8))  
 
-ggsave(b_plot, filename = 'habitat_landscape_metrics.png', dpi = 300, height = 5, width = 5)
-
+ggsave(filename = 'landscape_metrics.png',
+       height = 120, width = 100, units = 'mm',
+       dpi = 600)
 
 
 
